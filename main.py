@@ -1,15 +1,13 @@
 import streamlit as st
-import requests
-from bs4 import BeautifulSoup
-import google.generativeai as gen_ai
+from google import genai
 
 # Importing custom scraping functions
 from amazon import extract_amazon_product_info
 from flipkart import extract_flipkart_product_info
 from bigbasket import extract_bigbasket_product_info
-from zepto import extract_product_info
+from zepto import extract_zepto_product_info
 
-# Set Streamlit theme to light
+# Set Streamlit theme
 st.set_page_config(page_title="PureTech")
 
 # Title and description
@@ -21,7 +19,7 @@ st.markdown("<p style='text-align: center;'>Securely sorted and wisely chosen</p
 url = st.text_input('Enter Product URL:')
 
 if url:
-    # Determine the website based on the URL entered
+    # Identify the website
     if 'amazon' in url:
         website_name = 'Amazon'
     elif 'flipkart' in url:
@@ -35,78 +33,71 @@ if url:
 
     if website_name:
         try:
-            # Clear previous content
-            st.empty()
-
-            # Extract product information based on the website
-            if website_name.lower() == 'amazon':
+            # Extract product information
+            if website_name == 'Amazon':
                 title, price, image_url, ingredients_list = extract_amazon_product_info(url)
-            elif website_name.lower() == 'flipkart':
+            elif website_name == 'Flipkart':
                 title, price, image_url, ingredients_list = extract_flipkart_product_info(url)
-            elif website_name.lower() == 'bigbasket':
-                title, price, _, ingredients_list = extract_bigbasket_product_info(url)  # Ignore image_url for BigBasket
-                image_url = None  # Set image_url to None for BigBasket
-            elif website_name.lower() == 'zepto':
-                title, price, image_url, ingredients_list = extract_product_info(url)
-            else:
-                st.error("Invalid website name. Please enter a valid URL.")
+            elif website_name == 'BigBasket':
+                title, price, _, ingredients_list = extract_bigbasket_product_info(url)
+                image_url = None  # No image for BigBasket
+            elif website_name == 'Zepto':
+                title, price, image_url, ingredients_list = extract_zepto_product_info(url)
 
             if title and price:
-                # Display product information
+                # Display product details
                 st.subheader(title)
-                st.write(f"Price: {price}")
-                if image_url and website_name.lower() != 'bigbasket':  # Exclude image display for BigBasket
+                st.write(f"**Price:** {price}")
+                if image_url:
                     st.image(image_url, caption='Product Image')
 
-                # Get API key from secrets
+                # Load API Key
                 GOOGLE_API_KEY = st.secrets["api_keys"]["google_api_key"]
 
-                # Set up Google Gemini-Pro AI model
-                gen_ai.configure(api_key=GOOGLE_API_KEY)
-                model = gen_ai.GenerativeModel('gemini-pro')
+                # Initialize Gemini API
+                client = genai.Client(api_key=GOOGLE_API_KEY)
+                chat = client.chats.create(model="gemini-2.0-flash")
 
-                # Initialize chat session in Streamlit if not already present
-                if "chat_session" not in st.session_state:
-                    st.session_state.chat_session = model.start_chat(history=[])
-
-                if st.button('Analyse Your Product'):
-                    with st.expander("Ingredients"):
-                        gemini_response = st.session_state.chat_session.send_message(
-                            f"Please provide each and every ingredient list of the {title}, if ingredients not available fetch from it otherwise other sources."
+                if st.button('Analyze Your Product'):
+                    with st.expander("Ingredients Analysis"):
+                        # Get ingredients from Gemini
+                        response = chat.send_message(
+                            f"Please list all the ingredients of {title}, if unavailable, try alternative sources. This is the available ingredients on the url: {ingredients_list}. return the merged ingredient_list making sure not to repeat stuff"
                         )
-                        ingredients_gemini = gemini_response.parts[0].text.strip().split("\n")
-                        merged_ingredients = list(set(ingredients_list + ingredients_gemini))
-                        gemini_final_response = st.session_state.chat_session.send_message(
-                            f"Here is the merged ingredient list: {merged_ingredients}. Please analyze and provide the final ingredient list and put a ✅ emoji next to safe ingredients and a ❌ next to unhealthy ingredients. Don't include allergen information or extra details, stick to the ingredients only."
+        
+                        final_response = chat.send_message(
+                            f"Here is the merged ingredient list: {response}. "
+                            "Without repeating a single ingredient just list them and Analyze and mark ✅ for safe ingredients and ❌ for unhealthy ones. keep it short and simple"
                         )
-                        safety_score_response = st.session_state.chat_session.send_message(
-                            f"Compute the number of Unhealthy ingredients in {gemini_final_response} and compute the safety_score = 100 - 4 * number of Unhealthy ingredients and return the safety score as a number only avoid bad content"
+                        safety_score_response = chat.send_message(
+                            f"Compute the safety score based on unhealthy ingredients in {final_response.text}. "
+                            "Use this formula: safety_score = 100 - (4 * number of unhealthy ingredients). Return only the score only once."
                         )
-                        st.markdown(gemini_final_response.text)
+                        st.markdown(final_response.text)
+                        st.markdown(f"**Safety Score:** {safety_score_response.text}")
 
-                    st.markdown(f"Safety Score: {safety_score_response.text}")
+                    with st.expander("Harmful Ingredient Effects"):
+                        harmful_analysis = chat.send_message(
+                            f"List the unhealthy ingredients in {title} and their health effects in a table format."
+                        )
+                        st.markdown(harmful_analysis.text)
 
-                    harmful_analysis = st.session_state.chat_session.send_message(
-                        f"In a table format give the {title} unhealthy ingredients and their effects in another column keep the effects very short and precise"
-                    )
-                    st.markdown(harmful_analysis.text)
-
-                    category_recommendation = st.session_state.chat_session.send_message(
-                        f"Please recommend a product in the same category as that of {title} that is better than the current product along with an {url} link keep the content precise and short to the point do not brief. avoid unhealthy content."
-                    )
-
-                    reviews_summary = st.session_state.chat_session.send_message(
-                        f"Please analyze the top 5 customer reviews of {title} with given url {url} and provide an overall sentimental analysis and give summary keep it super short not exceeding more than four lines."
-                    )
-                    
-                    st.write(reviews_summary.text)
-                    st.write(category_recommendation.text)
+                    with st.expander("Better Alternatives & Reviews"):
+                        category_recommendation = chat.send_message(
+                            f"Recommend a better alternative for {title} with an {url} link."
+                        )
+                        reviews_summary = chat.send_message(
+                            f"Analyze the top 5 reviews of {title} from {url}. Summarize sentiment in max 4 lines."
+                        )
+                        st.write(category_recommendation.text)
+                        st.write(reviews_summary.text)
             else:
-                st.error("Unable to extract product information. Please check the URL and try again.")
+                st.error("Could not extract product information. Please check the URL.")
 
         except Exception as e:
             st.error(f"An error occurred: {e}")
 
     else:
         st.error("Invalid URL. Please enter a valid product URL.")
+
 st.markdown("<p style='text-align: center;'>Made by - Sumith, Vidhan, Swathi, and Venkat</p>", unsafe_allow_html=True)
