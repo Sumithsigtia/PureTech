@@ -1,4 +1,11 @@
+gradio 
+gradio-client
 streamlit 
-requests 
-beautifulsoup4 
-google-generativeai
+tensorflow-intel 
+websockets
+tenacity 
+protobuf
+typing_extensions>=4.5
+google-genai
+beautifulsoup4
+requests
